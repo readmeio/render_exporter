@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+npm-debug.log
+
+# Build outputs
+dist/
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.*.sw*
+
+# Temporary files
+tmp/
+temp/
+
+# Debug
+.node_repl_history
+
+# TypeScript
+*.tsbuildinfo
