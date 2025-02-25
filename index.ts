@@ -119,7 +119,7 @@ async function collectMetrics(
         unit: metric.unit,
         service_name:
           serviceMap.get(
-            metric.labels.find((x) => x.field == "service")?.value || "",
+            metric.labels.find((x) => x.field == "resource")?.value || "",
           )?.name || "unknown",
       };
 
