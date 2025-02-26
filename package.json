@@ -1,13 +1,13 @@
 {
   "name": "render_exporter",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && tsc",
     "dev": "npm run build && npm run start",
     "lint": "prettier --check . && eslint . --ext .ts",
-    "start": "node dist/index.js",
-    "watch": "nodemon --watch './**/*.ts' --ignore 'dist/**' --ext 'ts' --exec 'npm run build && node dist/index.js || echo \"TS compilation error, waiting for changes...\"'"
+    "start": "node dist/server.js",
+    "watch": "nodemon --watch './**/*.ts' --ignore 'dist/**' --ext 'ts' --exec 'npm run build && node dist/server.js || echo \"TS compilation error, waiting for changes...\"'"
   },
   "keywords": [],
   "author": "",

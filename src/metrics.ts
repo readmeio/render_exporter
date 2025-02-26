@@ -1,12 +1,6 @@
-import type {
-  FastifyBaseLogger,
-  FastifyReply,
-  FastifyRequest,
-  FastifyServerOptions,
-} from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
+import type { Config } from "./server";
 
-import { fastify } from "fastify";
-import fastifyBasicAuth from "@fastify/basic-auth";
 import {
   getServices,
   cpuUsage,
@@ -17,25 +11,6 @@ import {
   ScalingResourceID,
   Service,
 } from "@llimllib/renderapi";
-
-function requiredEnvVar(name: string) {
-  if (!process.env[name])
-    throw new Error(`required env var ${name} is not set`);
-  return process.env[name];
-}
-
-const ENV = requiredEnvVar("NODE_ENV");
-const RENDER_API_TOKEN = requiredEnvVar("RENDER_API_TOKEN");
-const PORT = parseInt(process.env.PORT || "3000", 10);
-const SERVICE_NAME_FILTER = process.env.SERVICE_NAME_FILTER || "";
-const BATCH_SIZE = 50;
-const AUTH_USERNAME = process.env.AUTH_USERNAME;
-const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
-
-if (!RENDER_API_TOKEN) {
-  console.error("RENDER_API_TOKEN environment variable is required");
-  process.exit(1);
-}
 
 // Chunk an array into batches
 function chunkArray<T>(array: T[], chunkSize: number): T[][] {
@@ -85,6 +60,7 @@ function formatMetricValues(metricName: string, values: MetricValue[]): string {
 async function collectMetrics(
   services: Service[],
   apiToken: string,
+  batchSize: number,
   metricFn: (
     token: string,
     serviceIds: ScalingResourceID[],
@@ -98,7 +74,7 @@ async function collectMetrics(
   // Create batches for API limits
   const idBatches = chunkArray(
     services.map((service) => service.id),
-    BATCH_SIZE,
+    batchSize,
   );
 
   const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
@@ -170,8 +146,9 @@ function collectServiceCountMetric(services: Service[]): MetricResult {
 async function collectInstanceCountMetrics(
   services: Service[],
   apiToken: string,
+  batchSize: number,
 ): Promise<MetricResult> {
-  return collectMetrics(services, apiToken, instanceCount, {
+  return collectMetrics(services, apiToken, batchSize, instanceCount, {
     name: "render_service_instance_count",
     help: "Current number of instances for a Render service",
     type: "gauge",
@@ -181,8 +158,9 @@ async function collectInstanceCountMetrics(
 async function collectCPUMetrics(
   services: Service[],
   apiToken: string,
+  batchSize: number,
 ): Promise<MetricResult> {
-  return collectMetrics(services, apiToken, cpuUsage, {
+  return collectMetrics(services, apiToken, batchSize, cpuUsage, {
     name: "render_service_cpu_usage",
     help: "CPU usage for a Render service",
     type: "gauge",
@@ -192,8 +170,9 @@ async function collectCPUMetrics(
 async function collectMemoryMetrics(
   services: Service[],
   apiToken: string,
+  batchSize: number,
 ): Promise<MetricResult> {
-  return collectMetrics(services, apiToken, memoryUsage, {
+  return collectMetrics(services, apiToken, batchSize, memoryUsage, {
     name: "render_service_memory_usage",
     help: "Memory usage for a Render service in bytes",
     type: "gauge",
@@ -212,81 +191,39 @@ function formatMetricResult(result: MetricResult): string {
 }
 
 // Main metrics handler function with parallel metric collection
-async function metrics(request: FastifyRequest, reply: FastifyReply) {
-  try {
-    // Fetch all services
-    const services = await getServices(RENDER_API_TOKEN, SERVICE_NAME_FILTER);
+export function createMetricsHandler(config: Config) {
+  return async function metrics(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      // Fetch all services
+      const services = await getServices(
+        config.renderApiToken,
+        config.serviceNameFilter,
+      );
 
-    // Collect all metrics in parallel
-    const metricResults = await Promise.all([
-      collectInstanceCountMetrics(services, RENDER_API_TOKEN),
-      collectServiceCountMetric(services),
-      collectCPUMetrics(services, RENDER_API_TOKEN),
-      collectMemoryMetrics(services, RENDER_API_TOKEN),
-    ]);
+      // Collect all metrics in parallel
+      const metricResults = await Promise.all([
+        collectInstanceCountMetrics(
+          services,
+          config.renderApiToken,
+          config.batchSize,
+        ),
+        collectServiceCountMetric(services),
+        collectCPUMetrics(services, config.renderApiToken, config.batchSize),
+        collectMemoryMetrics(services, config.renderApiToken, config.batchSize),
+      ]);
 
-    // Build metrics output
-    const metricsOutput = metricResults
-      .map(formatMetricResult)
-      .filter((output) => output.length > 0)
-      .join("\n");
+      // Build metrics output
+      const metricsOutput = metricResults
+        .map(formatMetricResult)
+        .filter((output) => output.length > 0)
+        .join("\n");
 
-    // Set content type for Prometheus
-    reply.header("Content-Type", "text/plain");
-    return metricsOutput;
-  } catch (error) {
-    request.log.error(error);
-    reply.code(500).send("Error fetching metrics");
-  }
-}
-
-// Start the server
-const start = async () => {
-  const logger: Record<string, FastifyServerOptions["logger"]> = {
-    development: {
-      transport: {
-        target: "pino-pretty",
-        options: {
-          translateTime: "HH:MM:ss Z",
-          ignore: "pid,hostname",
-          colorize: true,
-          useLevel: "debug",
-        },
-      },
-    },
-    production: true,
-    test: false,
+      // Set content type for Prometheus
+      reply.header("Content-Type", "text/plain");
+      return metricsOutput;
+    } catch (error) {
+      request.log.error(error);
+      reply.code(500).send("Error fetching metrics");
+    }
   };
-  if (!logger[ENV]) {
-    throw new Error(`Invalid env: ${ENV}`);
-  }
-
-  const server = fastify({ logger: logger[ENV] as FastifyBaseLogger });
-  if (AUTH_USERNAME && AUTH_PASSWORD) {
-    console.log("enabling basic auth");
-    await server.register(fastifyBasicAuth, {
-      validate: async (username: string, password: string) => {
-        if (username !== AUTH_USERNAME || password !== AUTH_PASSWORD) {
-          throw new Error("Invalid credentials");
-        }
-      },
-      authenticate: { realm: "Metrics API" },
-    });
-  }
-
-  // Apply auth to metrics endpoint
-  server.get("/metrics", {
-    onRequest: server.basicAuth,
-    handler: metrics,
-  });
-
-  try {
-    await server.listen({ port: PORT, host: "0.0.0.0" });
-    console.log(`Server listening on port ${PORT}`);
-  } catch (err) {
-    server.log.error(err);
-    process.exit(1);
-  }
-};
-
-start();
+}
