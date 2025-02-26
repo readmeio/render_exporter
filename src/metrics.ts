@@ -1,8 +1,10 @@
-import type { FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from "fastify";
 import type { Config } from "./server";
 
 import {
   getServices,
+  bandwidth,
+  activeConnections,
   cpuUsage,
   memoryUsage,
   instanceCount,
@@ -90,31 +92,40 @@ async function collectMetrics(
   // Flatten and process all results
   const values: MetricValue[] = [];
 
-  allMetricsResults.flat().forEach((metric: MetricResponse) => {
-    if (metric.labels?.length > 0 && metric.values.length > 0) {
-      const latestValue = metric.values[metric.values.length - 1].value;
+  allMetricsResults
+    .flat()
+    .filter(Boolean)
+    .forEach((metric: MetricResponse) => {
+      if (metric.labels?.length > 0 && metric.values.length > 0) {
+        const latestValue = metric.values[metric.values.length - 1].value;
 
-      const labels: Record<string, string> = {
-        unit: metric.unit,
-        service_name:
-          serviceMap.get(
-            metric.labels.find((x) => x.field == "resource")?.value || "",
-          )?.name || "unknown",
-      };
+        const labels: Record<string, string> = {
+          unit: metric.unit,
+          service_name:
+            serviceMap.get(
+              metric.labels.find((x) => x.field == "resource")?.value || "",
+            )?.name || "unknown",
+        };
 
-      // Add all labels from the API response
-      metric.labels.forEach((label: MetricLabel) => {
-        if (label.field && label.value !== undefined) {
-          labels[label.field] = String(label.value);
-        }
-      });
+        // Add all labels from the API response
+        metric.labels.forEach((label: MetricLabel) => {
+          if (label.field && label.value !== undefined) {
+            labels[label.field] = String(label.value);
+          }
+        });
 
-      values.push({
-        labels,
-        value: latestValue,
-      });
-    }
-  });
+        values.push({
+          labels,
+          value: latestValue,
+        });
+      }
+    });
+
+  if (values.length == 0) {
+    throw new Error(
+      `Empty metrics result ${metricFn.name} ${services.map((svc) => `«${svc.id} ${svc.name}»`)}`,
+    );
+  }
 
   const updatedDefinition = { ...metricDefinition };
   // get the unit from the first data point and assume it's the unit for all
@@ -179,6 +190,65 @@ async function collectMemoryMetrics(
   });
 }
 
+async function collectBandwidth(
+  services: Service[],
+  apiToken: string,
+  batchSize: number,
+  logger: FastifyBaseLogger,
+): Promise<MetricResult> {
+  const definition = {
+    name: "render_service_bandwidth",
+    help: "Bandwidth used by a render service",
+    type: "gauge",
+  };
+
+  // As far as I can tell, only web services are valid here. Waiting on
+  // response from render
+  const relevantServices = services.filter((svc) => svc.id.startsWith("srv-"));
+  if (relevantServices.length == 0) {
+    logger.debug("No relevant services found for active connections");
+    return { definition, values: [] };
+  }
+
+  return collectMetrics(
+    relevantServices,
+    apiToken,
+    batchSize,
+    bandwidth,
+    definition,
+  );
+}
+
+async function collectActiveConnections(
+  services: Service[],
+  apiToken: string,
+  batchSize: number,
+  logger: FastifyBaseLogger,
+): Promise<MetricResult> {
+  const definition = {
+    name: "render_service_active_connections",
+    help: "Active connections for redis or postgres servers",
+    type: "gauge",
+  };
+
+  // connection metrics are only valid for redis and postgres services
+  const relevantServices = services.filter(
+    (svc) => svc.id.startsWith("red-") || svc.id.startsWith("dpg-"),
+  );
+  if (relevantServices.length == 0) {
+    logger.debug("No relevant services found for active connections");
+    return { definition, values: [] };
+  }
+
+  return collectMetrics(
+    relevantServices,
+    apiToken,
+    batchSize,
+    activeConnections,
+    definition,
+  );
+}
+
 // Format a single metric result into Prometheus format
 function formatMetricResult(result: MetricResult): string {
   if (result.values.length === 0) {
@@ -193,6 +263,8 @@ function formatMetricResult(result: MetricResult): string {
 // Main metrics handler function with parallel metric collection
 export function createMetricsHandler(config: Config) {
   return async function metrics(request: FastifyRequest, reply: FastifyReply) {
+    const logger = request.log;
+
     try {
       // Fetch all services
       const services = await getServices(
@@ -206,14 +278,57 @@ export function createMetricsHandler(config: Config) {
           services,
           config.renderApiToken,
           config.batchSize,
-        ),
+        ).catch((err) => {
+          logger.error(`Error collecting instance counts\n${err}`);
+          return null;
+        }),
         collectServiceCountMetric(services),
-        collectCPUMetrics(services, config.renderApiToken, config.batchSize),
-        collectMemoryMetrics(services, config.renderApiToken, config.batchSize),
+        collectCPUMetrics(
+          services,
+          config.renderApiToken,
+          config.batchSize,
+        ).catch((err) => {
+          logger.error(`Error collecting CPU metrics\n${err}`);
+          return null;
+        }),
+        collectMemoryMetrics(
+          services,
+          config.renderApiToken,
+          config.batchSize,
+        ).catch((err) => {
+          logger.error(`Error collecting memory metrics\n${err}`);
+          return null;
+        }),
+        collectBandwidth(
+          services,
+          config.renderApiToken,
+          config.batchSize,
+          logger,
+        ).catch((err) => {
+          logger.error(`Error collecting bandwidth metrics\n${err}`);
+          return null;
+        }),
+        collectActiveConnections(
+          services,
+          config.renderApiToken,
+          config.batchSize,
+          logger,
+        ).catch((err) => {
+          logger.error(`Error collecting active connections:\n${err}`);
+          return null;
+        }),
       ]);
+
+      if (metricResults.filter((x) => x != null).length === 0) {
+        logger.error("All metric collections failed");
+        return reply
+          .code(500)
+          .send("Error fetching metrics: all collectors failed");
+      }
 
       // Build metrics output
       const metricsOutput = metricResults
+        .filter((x) => x != null)
         .map(formatMetricResult)
         .filter((output) => output.length > 0)
         .join("\n");
@@ -222,7 +337,7 @@ export function createMetricsHandler(config: Config) {
       reply.header("Content-Type", "text/plain");
       return metricsOutput;
     } catch (error) {
-      request.log.error(error);
+      logger.error(error);
       reply.code(500).send("Error fetching metrics");
     }
   };
