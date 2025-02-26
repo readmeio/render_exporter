@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from "fastify";
-import type { Config } from "./server";
+
+import { inspect } from "node:util";
 
 import {
   getServices,
@@ -13,6 +14,11 @@ import {
   ScalingResourceID,
   Service,
 } from "@llimllib/renderapi";
+import { debug as Debug } from "debug";
+
+import type { Config } from "./server";
+
+const debug = Debug("render_exporter");
 
 // Chunk an array into batches
 function chunkArray<T>(array: T[], chunkSize: number): T[][] {
@@ -69,6 +75,7 @@ async function collectMetrics(
     startTime: string,
   ) => Promise<MetricResponse[]>,
   metricDefinition: MetricDefinition,
+  startTime?: string,
 ): Promise<MetricResult> {
   const serviceMap = new Map<string, Service>();
   services.forEach((service) => serviceMap.set(service.id, service));
@@ -81,9 +88,9 @@ async function collectMetrics(
 
   const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
 
-  // Make all API calls in parallel with the startTime parameter
+  // Make all API calls in parallel
   const allMetricsPromises = idBatches.map((batch) =>
-    metricFn(apiToken, batch, twoMinutesAgo),
+    metricFn(apiToken, batch, startTime || twoMinutesAgo),
   );
 
   // Wait for all API calls to complete
@@ -122,6 +129,7 @@ async function collectMetrics(
     });
 
   if (values.length == 0) {
+    debug(`full results ${inspect(allMetricsResults)}`);
     throw new Error(
       `Empty metrics result ${metricFn.name} ${services.map((svc) => `«${svc.id} ${svc.name}»`)}`,
     );
@@ -210,12 +218,16 @@ async function collectBandwidth(
     return { definition, values: [] };
   }
 
+  // bandwidth is only collected every hour, so start an hour ago
+  const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
   return collectMetrics(
     relevantServices,
     apiToken,
     batchSize,
     bandwidth,
     definition,
+    hourAgo,
   );
 }
 
@@ -271,6 +283,7 @@ export function createMetricsHandler(config: Config) {
         config.renderApiToken,
         config.serviceNameFilter,
       );
+      debug(`services: ${services.map((svc) => `${svc.id} ${svc.name}, `)}`);
 
       // Collect all metrics in parallel
       const metricResults = await Promise.all([
