@@ -16,16 +16,32 @@ This exporter connects to the Render.com API and exposes various metrics about y
 - Node.js (v22 or higher recommended)
 - A Render.com [API token](https://render.com/docs/api#1-create-an-api-key)
 
-## Installation
+## Usage
+
+### Running locally
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/render-prometheus-exporter.git
-cd render-prometheus-exporter
-
-# Install dependencies
 npm install
+export RENDER_API_TOKEN=your_render_api_token
+export NODE_ENV=development
+npm run watch
 ```
+
+### Basic auth
+
+If both the `AUTH_USERNAME` and `AUTH_PASSWORD` variabeles are present, the
+exporter will require basic authentication to serve `/metrics`.
+
+If either is absent or empty, it will serve unencrypted.
+
+### Deploying to Render.com
+
+1. Create a new Web Service on Render.com
+2. Connect it to the public repository at `https://github.com/readmeio/render_exporter`
+3. Set the build command to `npm ci --include dev && npm run build`
+4. Set the run command to `npm run start`
+5. Add environment variables for configuration
+6. Deploy
 
 ## Configuration
 
@@ -37,30 +53,8 @@ The exporter is configured using environment variables:
 | `PORT`                | Port to run the exporter on                 | No       | 3000              |
 | `NODE_ENV`            | Environment (development, production, test) | Yes      | -                 |
 | `SERVICE_NAME_FILTER` | Filter services by name                     | No       | "" (all services) |
-
-## Usage
-
-### Running locally
-
-```bash
-export RENDER_API_TOKEN=your_render_api_token
-export NODE_ENV=development
-npm start
-```
-
-### Running with Docker
-
-```bash
-docker build -t render-prometheus-exporter .
-docker run -p 3000:3000 -e RENDER_API_TOKEN=your_render_api_token -e NODE_ENV=production render-prometheus-exporter
-```
-
-### Deploying to Render.com
-
-1. Create a new Web Service on Render.com
-2. Connect your repository
-3. Add the required environment variables
-4. Deploy
+| `AUTH_USERNAME`       | Basic auth username                         | No       | -                 |
+| `AUTH_PASSWORD`       | Basic auth password                         | No       | -                 |
 
 ## Metrics
 
