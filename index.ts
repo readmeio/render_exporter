@@ -6,6 +6,7 @@ import type {
 } from "fastify";
 
 import { fastify } from "fastify";
+import fastifyBasicAuth from "@fastify/basic-auth";
 import {
   getServices,
   cpuUsage,
@@ -28,6 +29,8 @@ const RENDER_API_TOKEN = requiredEnvVar("RENDER_API_TOKEN");
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const SERVICE_NAME_FILTER = process.env.SERVICE_NAME_FILTER || "";
 const BATCH_SIZE = 50;
+const AUTH_USERNAME = process.env.AUTH_USERNAME;
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
 
 if (!RENDER_API_TOKEN) {
   console.error("RENDER_API_TOKEN environment variable is required");
@@ -259,7 +262,23 @@ const start = async () => {
   }
 
   const server = fastify({ logger: logger[ENV] as FastifyBaseLogger });
-  server.get("/metrics", metrics);
+  if (AUTH_USERNAME && AUTH_PASSWORD) {
+    console.log("enabling basic auth");
+    await server.register(fastifyBasicAuth, {
+      validate: async (username: string, password: string) => {
+        if (username !== AUTH_USERNAME || password !== AUTH_PASSWORD) {
+          throw new Error("Invalid credentials");
+        }
+      },
+      authenticate: { realm: "Metrics API" },
+    });
+  }
+
+  // Apply auth to metrics endpoint
+  server.get("/metrics", {
+    onRequest: server.basicAuth,
+    handler: metrics,
+  });
 
   try {
     await server.listen({ port: PORT, host: "0.0.0.0" });

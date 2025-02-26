@@ -14,6 +14,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@fastify/basic-auth": "^6.0.3",
     "@llimllib/renderapi": "^1.0.0",
     "fastify": "^5.2.1"
   },
