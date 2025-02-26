@@ -27,10 +27,16 @@ export NODE_ENV=development
 npm run watch
 ```
 
+### Bearer auth
+
+If `AUTH_BEARER_TOKEN` is set, the exporter will require the token in an
+Authorization header to server `/metrics`
+
 ### Basic auth
 
-If both the `AUTH_USERNAME` and `AUTH_PASSWORD` variabeles are present, the
-exporter will require basic authentication to serve `/metrics`.
+If both the `AUTH_USERNAME` and `AUTH_PASSWORD` variabeles are present, and
+bearer auth is not enabled, the exporter will require basic authentication to
+serve `/metrics`.
 
 If either is absent or empty, it will serve unencrypted.
 
@@ -55,6 +61,7 @@ The exporter is configured using environment variables:
 | `SERVICE_NAME_FILTER` | Filter services by name                     | No       | "" (all services) |
 | `AUTH_USERNAME`       | Basic auth username                         | No       | -                 |
 | `AUTH_PASSWORD`       | Basic auth password                         | No       | -                 |
+| `AUTH_BEARER_TOKEN`   | Bearer auth token                           | Noe      | -                 |
 
 ## Metrics
 

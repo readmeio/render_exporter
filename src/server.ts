@@ -1,9 +1,22 @@
-import type { FastifyBaseLogger, FastifyServerOptions } from "fastify";
+import type {
+  FastifyInstance,
+  FastifyBaseLogger,
+  FastifyServerOptions,
+  FastifyRequest,
+  FastifyReply,
+  onRequestHookHandler,
+} from "fastify";
 
 import { fastify } from "fastify";
 import fastifyBasicAuth from "@fastify/basic-auth";
 
 import { createMetricsHandler } from "./metrics.js";
+
+declare module "fastify" {
+  interface FastifyInstance {
+    verifyBearerToken: onRequestHookHandler;
+  }
+}
 
 export interface Config {
   env: string;
@@ -40,6 +53,58 @@ function loadConfig(): Config {
   };
 }
 
+// Function to set up bearer token authentication
+async function setupBearerTokenAuth(server: FastifyInstance, config: Config) {
+  server.log.info("enabling bearer token auth");
+
+  // Register a custom authentication hook for bearer token
+  server.decorate(
+    "verifyBearerToken",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authHeader = request.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        reply.code(401).send({ error: "Unauthorized: Bearer token required" });
+        return;
+      }
+
+      const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+      if (token !== config.auth.bearer_token) {
+        reply.code(401).send({ error: "Unauthorized: Invalid token" });
+        return;
+      }
+    },
+  );
+
+  // Apply bearer token auth to metrics endpoint
+  server.get("/metrics", {
+    onRequest: server.verifyBearerToken,
+    handler: createMetricsHandler(config),
+  });
+}
+
+// Function to set up basic authentication
+async function setupBasicAuth(server: FastifyInstance, config: Config) {
+  server.log.info("enabling basic auth");
+
+  await server.register(fastifyBasicAuth, {
+    validate: async (username: string, password: string) => {
+      if (
+        username !== config.auth.username ||
+        password !== config.auth.password
+      ) {
+        throw new Error("Invalid credentials");
+      }
+    },
+    authenticate: { realm: "Metrics API" },
+  });
+
+  // Apply auth to metrics endpoint
+  server.get("/metrics", {
+    onRequest: server.basicAuth,
+    handler: createMetricsHandler(config),
+  });
+}
+
 // Start the server
 const start = async () => {
   const config = loadConfig();
@@ -64,24 +129,10 @@ const start = async () => {
   }
 
   const server = fastify({ logger: logger[config.env] as FastifyBaseLogger });
-  if (config.auth.username && config.auth.password) {
-    server.log.info("enabling basic auth");
-    await server.register(fastifyBasicAuth, {
-      validate: async (username: string, password: string) => {
-        if (
-          username !== config.auth.username ||
-          password !== config.auth.password
-        ) {
-          throw new Error("Invalid credentials");
-        }
-      },
-      authenticate: { realm: "Metrics API" },
-    });
-    // Apply auth to metrics endpoint
-    server.get("/metrics", {
-      onRequest: server.basicAuth,
-      handler: createMetricsHandler(config),
-    });
+  if (config.auth.bearer_token) {
+    await setupBearerTokenAuth(server, config);
+  } else if (config.auth.username && config.auth.password) {
+    await setupBasicAuth(server, config);
   } else {
     server.get("/metrics", {
       handler: createMetricsHandler(config),
@@ -92,8 +143,6 @@ const start = async () => {
   server.get("/", (request, reply) => {
     reply.send({ status: "ok" });
   });
-
-  // You can add other non-authenticated routes here
   server.get("/favicon.ico", (request, reply) => {
     reply.code(204).send();
   });
