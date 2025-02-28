@@ -1,22 +1,25 @@
+import type {
+  MetricLabel,
+  MetricResponse,
+  Redis,
+  Postgres,
+  Service,
+} from "@llimllib/renderapi";
 import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from "fastify";
+import type { Config } from "./server";
 
 import { inspect } from "node:util";
 
 import {
-  getServices,
   bandwidth,
   activeConnections,
   cpuUsage,
   memoryUsage,
   instanceCount,
-  MetricLabel,
-  MetricResponse,
-  ScalingResourceID,
-  Service,
 } from "@llimllib/renderapi";
 import { debug as Debug } from "debug";
 
-import type { Config } from "./server";
+import { ResourceCache } from "./resourceCache";
 
 const debug = Debug("render_exporter");
 
@@ -65,24 +68,40 @@ function formatMetricValues(metricName: string, values: MetricValue[]): string {
   );
 }
 
-async function collectMetrics(
-  services: Service[],
+/**
+ * Collects and processes metrics for a list of services by making batched API calls.
+ *
+ * @template T - The type of resource IDs accepted by the metric function (e.g., ServiceID, RedisID)
+ *
+ * @param services - Array of services to collect metrics for
+ * @param apiToken - API authentication token
+ * @param batchSize - Maximum number of services to include in a single API call
+ * @param metricFn - Function that retrieves metrics from the API
+ * @param metricDefinition - Definition of the metric to collect (name, help text, type)
+ * @param startTime - Optional ISO timestamp for the start of the metrics window (defaults to 2 minutes ago)
+ *
+ * @returns Promise resolving to a MetricResult containing the metric definition and processed values
+ *
+ * @throws Error if no metric values are returned from the API
+ */
+async function collectMetrics<T extends string>(
+  services: (Service | Redis | Postgres)[],
   apiToken: string,
   batchSize: number,
   metricFn: (
     token: string,
-    serviceIds: ScalingResourceID[],
+    resources: T[],
     startTime: string,
   ) => Promise<MetricResponse[]>,
   metricDefinition: MetricDefinition,
   startTime?: string,
 ): Promise<MetricResult> {
-  const serviceMap = new Map<string, Service>();
+  const serviceMap = new Map<string, Service | Redis | Postgres>();
   services.forEach((service) => serviceMap.set(service.id, service));
 
   // Create batches for API limits
   const idBatches = chunkArray(
-    services.map((service) => service.id),
+    services.map((service) => service.id as T),
     batchSize,
   );
 
@@ -232,10 +251,9 @@ async function collectBandwidth(
 }
 
 async function collectActiveConnections(
-  services: Service[],
+  services: (Redis | Postgres)[],
   apiToken: string,
   batchSize: number,
-  logger: FastifyBaseLogger,
 ): Promise<MetricResult> {
   const definition = {
     name: "render_service_active_connections",
@@ -243,17 +261,8 @@ async function collectActiveConnections(
     type: "gauge",
   };
 
-  // connection metrics are only valid for redis and postgres services
-  const relevantServices = services.filter(
-    (svc) => svc.id.startsWith("red-") || svc.id.startsWith("dpg-"),
-  );
-  if (relevantServices.length == 0) {
-    logger.debug("No relevant services found for active connections");
-    return { definition, values: [] };
-  }
-
   return collectMetrics(
-    relevantServices,
+    services,
     apiToken,
     batchSize,
     activeConnections,
@@ -273,16 +282,20 @@ function formatMetricResult(result: MetricResult): string {
 }
 
 // Main metrics handler function with parallel metric collection
-export function createMetricsHandler(config: Config) {
+export async function createMetricsHandler(config: Config) {
+  const resourceCache = new ResourceCache(
+    config.renderApiToken,
+    config.serviceNameFilter,
+  );
+  await resourceCache.getResources();
+
   return async function metrics(request: FastifyRequest, reply: FastifyReply) {
     const logger = request.log;
 
+    const { services, redises, postgreses } =
+      await resourceCache.getResources();
+
     try {
-      // Fetch all services
-      const services = await getServices(
-        config.renderApiToken,
-        config.serviceNameFilter,
-      );
       debug(`services: ${services.map((svc) => `${svc.id} ${svc.name}, `)}`);
 
       // Collect all metrics in parallel
@@ -322,10 +335,9 @@ export function createMetricsHandler(config: Config) {
           return null;
         }),
         collectActiveConnections(
-          services,
+          [...redises, ...postgreses],
           config.renderApiToken,
           config.batchSize,
-          logger,
         ).catch((err) => {
           logger.error(`Error collecting active connections:\n${err}`);
           return null;
