@@ -78,7 +78,7 @@ async function setupBearerTokenAuth(server: FastifyInstance, config: Config) {
   // Apply bearer token auth to metrics endpoint
   server.get("/metrics", {
     onRequest: server.verifyBearerToken,
-    handler: await createMetricsHandler(config),
+    handler: createMetricsHandler(config),
   });
 }
 
@@ -101,7 +101,7 @@ async function setupBasicAuth(server: FastifyInstance, config: Config) {
   // Apply auth to metrics endpoint
   server.get("/metrics", {
     onRequest: server.basicAuth,
-    handler: await createMetricsHandler(config),
+    handler: createMetricsHandler(config),
   });
 }
 
@@ -135,7 +135,7 @@ const start = async () => {
     await setupBasicAuth(server, config);
   } else {
     server.get("/metrics", {
-      handler: await createMetricsHandler(config),
+      handler: createMetricsHandler(config),
     });
   }
 

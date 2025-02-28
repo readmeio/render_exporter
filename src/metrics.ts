@@ -5,21 +5,23 @@ import type {
   Postgres,
   Service,
 } from "@llimllib/renderapi";
+
 import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from "fastify";
 import type { Config } from "./server";
 
 import { inspect } from "node:util";
 
 import {
-  bandwidth,
   activeConnections,
+  bandwidth,
   cpuUsage,
-  memoryUsage,
+  getServices,
   instanceCount,
+  listRedis,
+  listPostgres,
+  memoryUsage,
 } from "@llimllib/renderapi";
 import { debug as Debug } from "debug";
-
-import { ResourceCache } from "./resourceCache";
 
 const debug = Debug("render_exporter");
 
@@ -282,20 +284,16 @@ function formatMetricResult(result: MetricResult): string {
 }
 
 // Main metrics handler function with parallel metric collection
-export async function createMetricsHandler(config: Config) {
-  const resourceCache = new ResourceCache(
-    config.renderApiToken,
-    config.serviceNameFilter,
-  );
-  await resourceCache.getResources();
-
+export function createMetricsHandler(config: Config) {
   return async function metrics(request: FastifyRequest, reply: FastifyReply) {
     const logger = request.log;
 
-    const { services, redises, postgreses } =
-      await resourceCache.getResources();
-
     try {
+      const [services, redises, postgreses] = await Promise.all([
+        getServices(config.renderApiToken, config.serviceNameFilter),
+        listRedis(config.renderApiToken, config.serviceNameFilter),
+        listPostgres(config.renderApiToken, config.serviceNameFilter),
+      ]);
       debug(`services: ${services.map((svc) => `${svc.id} ${svc.name}, `)}`);
 
       // Collect all metrics in parallel
