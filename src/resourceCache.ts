@@ -86,9 +86,9 @@ export class ResourceCache {
     postgreses: Postgres[];
   }> {
     if (this.isStale()) {
-      // if this is stale, refresh our Resources but _do not_ await it - we
-      // want it to happen after we serve the resources
-      this.refreshResources();
+      // defer execution of this.refreshResources, the caller does not want to
+      // wait on it but it should happen in the background
+      setTimeout(() => this.refreshResources(), 0);
     }
 
     return {
