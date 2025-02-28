@@ -15,7 +15,7 @@
   "description": "",
   "dependencies": {
     "@fastify/basic-auth": "^6.0.3",
-    "@llimllib/renderapi": "^3.0.3",
+    "@llimllib/renderapi": "^3.3.0",
     "debug": "^4.4.0",
     "fastify": "^5.2.1"
   },
